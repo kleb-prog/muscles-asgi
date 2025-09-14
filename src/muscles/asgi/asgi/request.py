@@ -932,7 +932,8 @@ class RequestMaker:
 
     async def make_body_from_multipart(self):
         """
-        Разбираем данные multipart/form-data с использованием библиотеки python-multipart
+        Разбор multipart/form-data с помощью requests-toolbelt.
+        Возвращает dict с FieldStorage и FileStorage.
         """
         try:
             body = await self.make_body_from_buffer()
@@ -946,20 +947,46 @@ class RequestMaker:
 
             for part in multipart_data.parts:
                 disposition = part.headers.get(b"Content-Disposition", b"").decode()
-                if "filename=" in disposition:
-                    # файл
-                    name = disposition.split("name=")[1].split(";")[0].strip('"')
-                    filename = disposition.split("filename=")[1].strip('"')
-                    fields[name] = {
-                        "filename": filename,
-                        "content_type": part.headers.get(b"Content-Type", b"text/plain").decode(),
-                        "content": part.content,
-                        "size": len(part.content),
-                    }
+                name, filename = None, None
+
+                # достаем name и filename
+                for item in disposition.split(";"):
+                    item = item.strip()
+                    if item.startswith("name="):
+                        name = item.split("=", 1)[1].strip('"')
+                    elif item.startswith("filename="):
+                        filename = item.split("=", 1)[1].strip('"')
+
+                if not name:
+                    continue
+
+                if filename:
+                    # файл -> FileStorage
+                    file_storage = FileStorage(
+                        name=name,
+                        value=part.content,
+                        filename=filename,
+                        mime_type=part.headers.get(b"Content-Type", b"application/octet-stream").decode(),
+                        bytes_read=len(part.content),
+                    )
+                    # поддержка множественных файлов с одинаковым name
+                    if name in fields:
+                        if isinstance(fields[name], list):
+                            fields[name].append(file_storage)
+                        else:
+                            fields[name] = [fields[name], file_storage]
+                    else:
+                        fields[name] = file_storage
                 else:
-                    # обычное поле
-                    name = disposition.split("name=")[1].strip('"')
-                    fields[name] = part.text
+                    # обычное поле -> FieldStorage
+                    field_storage = FieldStorage(name=name, value=part.text)
+                    if name in fields:
+                        if isinstance(fields[name], list):
+                            fields[name].append(field_storage)
+                        else:
+                            fields[name] = [fields[name], field_storage]
+                    else:
+                        fields[name] = field_storage
 
             return fields
 
