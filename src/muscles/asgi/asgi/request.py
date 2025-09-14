@@ -930,7 +930,7 @@ class RequestMaker:
                 fields[_data[0]] = FieldStorage(_data[0], _data[1])
         return fields
 
-    async def make_body_from_multipart(self, content_type, body):
+    async def make_body_from_multipart(self):
         """
         Разбираем данные multipart/form-data с использованием библиотеки python-multipart
         """
