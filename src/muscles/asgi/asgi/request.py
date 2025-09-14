@@ -935,38 +935,80 @@ class RequestMaker:
         Разбираем данные multipart/form-data с использованием библиотеки python-multipart
         """
         try:
-            input = await self.make_body_from_buffer()
+            input_data = await self.make_body_from_buffer()
             fields = {}
 
             # Получаем заголовок Content-Type и boundary
             content_type = self.headers.get('content-type', '')
-            boundary = content_type.split("boundary=")[-1].encode()
-
-            if not boundary:
+            if 'boundary=' not in content_type:
                 raise ValueError("Boundary не найден в заголовке Content-Type")
 
-            # Создаем MultipartParser для разбора данных
-            parser = MultipartParser(input, boundary)
+            boundary = content_type.split("boundary=")[-1].strip()
 
-            # Парсим данные
+            # Убираем кавычки если они есть
+            if boundary.startswith('"') and boundary.endswith('"'):
+                boundary = boundary[1:-1]
+
+            # Создаем MultipartParser для разбора данных
+            parser = MultipartParser(boundary)
+
+            # Записываем данные в парсер
+            parser.write(input_data)
+
+            # Финализируем парсинг
+            parser.finalize()
+
+            # Теперь можем итерироваться по частям
             for part in parser:
-                disposition = part.headers.get(b'Content-Disposition', b'').decode('utf-8')
-                if 'filename=' in disposition:
+                # Получаем заголовок Content-Disposition
+                disposition_header = part.headers.get('Content-Disposition', '')
+
+                if not disposition_header:
+                    continue
+
+                # Парсим параметры из Content-Disposition
+                # Формат: form-data; name="field_name"; filename="file.txt"
+                params = {}
+                for param in disposition_header.split(';'):
+                    param = param.strip()
+                    if '=' in param:
+                        key, value = param.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"')
+                        params[key] = value
+
+                field_name = params.get('name', '')
+                if not field_name:
+                    continue
+
+                filename = params.get('filename')
+
+                # Получаем содержимое части
+                content = part.content
+
+                if filename is not None:
                     # Если это файл
-                    name = disposition.split('name=')[1].split(';')[0].strip('"')
-                    filename = disposition.split('filename=')[1].strip('"')
-                    fields[name] = {
+                    content_type_header = part.headers.get('Content-Type', 'application/octet-stream')
+                    fields[field_name] = {
                         'filename': filename,
-                        'content_type': part.headers.get(b'Content-Type', b'text/plain').decode('utf-8'),
-                        'content': part.file.read(),
-                        'size': len(part.file.read())
+                        'content_type': content_type_header,
+                        'content': content,
+                        'size': len(content) if content else 0
                     }
                 else:
                     # Если это обычное поле формы
-                    name = disposition.split('name=')[1].strip('"')
-                    fields[name] = part.file.read().decode('utf-8')
+                    if content:
+                        try:
+                            fields[field_name] = content.decode('utf-8')
+                        except (UnicodeDecodeError, AttributeError):
+                            # Если content уже строка или не удается декодировать
+                            fields[field_name] = content if isinstance(content, str) else content.decode('utf-8',
+                                                                                                         errors='replace')
+                    else:
+                        fields[field_name] = ''
 
             return fields
+
         except Exception as e:
             print(e)
             traceback.extract_tb(e.__traceback__)
