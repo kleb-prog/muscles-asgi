@@ -4,7 +4,7 @@ import traceback
 import urllib
 from urllib.parse import urlparse, urlunparse, parse_qs
 from operator import itemgetter
-from multipart import MultipartParser
+from requests_toolbelt.multipart import decoder
 import re
 
 from muscles.core import Dependency
@@ -935,77 +935,31 @@ class RequestMaker:
         Разбираем данные multipart/form-data с использованием библиотеки python-multipart
         """
         try:
-            input_data = await self.make_body_from_buffer()
+            body = await self.make_body_from_buffer()
+            content_type = self.headers.get("content-type")
+
+            if not content_type or "boundary=" not in content_type:
+                raise ValueError("Boundary not found in Content-Type header")
+
+            multipart_data = decoder.MultipartDecoder(body, content_type)
             fields = {}
 
-            # Получаем заголовок Content-Type и boundary
-            content_type = self.headers.get('content-type', '')
-            if 'boundary=' not in content_type:
-                raise ValueError("Boundary не найден в заголовке Content-Type")
-
-            boundary = content_type.split("boundary=")[-1].strip()
-
-            # Убираем кавычки если они есть
-            if boundary.startswith('"') and boundary.endswith('"'):
-                boundary = boundary[1:-1]
-
-            # Создаем MultipartParser для разбора данных
-            parser = MultipartParser(boundary)
-
-            # Записываем данные в парсер
-            parser.write(input_data)
-
-            # Финализируем парсинг
-            parser.finalize()
-
-            # Теперь можем итерироваться по частям
-            for part in parser:
-                # Получаем заголовок Content-Disposition
-                disposition_header = part.headers.get('Content-Disposition', '')
-
-                if not disposition_header:
-                    continue
-
-                # Парсим параметры из Content-Disposition
-                # Формат: form-data; name="field_name"; filename="file.txt"
-                params = {}
-                for param in disposition_header.split(';'):
-                    param = param.strip()
-                    if '=' in param:
-                        key, value = param.split('=', 1)
-                        key = key.strip()
-                        value = value.strip().strip('"')
-                        params[key] = value
-
-                field_name = params.get('name', '')
-                if not field_name:
-                    continue
-
-                filename = params.get('filename')
-
-                # Получаем содержимое части
-                content = part.content
-
-                if filename is not None:
-                    # Если это файл
-                    content_type_header = part.headers.get('Content-Type', 'application/octet-stream')
-                    fields[field_name] = {
-                        'filename': filename,
-                        'content_type': content_type_header,
-                        'content': content,
-                        'size': len(content) if content else 0
+            for part in multipart_data.parts:
+                disposition = part.headers.get(b"Content-Disposition", b"").decode()
+                if "filename=" in disposition:
+                    # файл
+                    name = disposition.split("name=")[1].split(";")[0].strip('"')
+                    filename = disposition.split("filename=")[1].strip('"')
+                    fields[name] = {
+                        "filename": filename,
+                        "content_type": part.headers.get(b"Content-Type", b"text/plain").decode(),
+                        "content": part.content,
+                        "size": len(part.content),
                     }
                 else:
-                    # Если это обычное поле формы
-                    if content:
-                        try:
-                            fields[field_name] = content.decode('utf-8')
-                        except (UnicodeDecodeError, AttributeError):
-                            # Если content уже строка или не удается декодировать
-                            fields[field_name] = content if isinstance(content, str) else content.decode('utf-8',
-                                                                                                         errors='replace')
-                    else:
-                        fields[field_name] = ''
+                    # обычное поле
+                    name = disposition.split("name=")[1].strip('"')
+                    fields[name] = part.text
 
             return fields
 
