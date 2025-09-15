@@ -782,6 +782,11 @@ class Request:
         for part in self._body:
             if isinstance(self._body[part], FileStorage):
                 files[part] = self._body[part]
+            elif isinstance(self._body[part], list):
+                files[part] = []
+                for el_part in self._body[part]:
+                    if isinstance(el_part, FileStorage):
+                        files[part].append(el_part)
         return files
 
     @property
